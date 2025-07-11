@@ -1,9 +1,10 @@
 <?php
 session_start();
+require_once 'config.php';
 
 // Check if user is logged in
 if (!isset($_SESSION['user_id'])) {
-    // User not logged in, redirect to login
+    // If not, redirect to login
     header('Location: login.php');
     exit;
 }
