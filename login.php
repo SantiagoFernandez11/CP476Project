@@ -31,19 +31,6 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
             $stmt->execute([$username]);
             $user = $stmt->fetch();
             
-            // DEBUG INFO - Remove after testing
-            echo "<div style='border: 1px solid red; padding: 10px; margin: 10px; background: #ffe6e6;'>";
-            echo "<h3>Debug Information:</h3>";
-            echo "Username entered: '" . htmlspecialchars($username) . "'<br>";
-            echo "Password entered: '" . htmlspecialchars($password) . "'<br>";
-            echo "User found in DB: " . ($user ? 'YES' : 'NO') . "<br>";
-            if ($user) {
-                echo "DB Username: '" . $user['username'] . "'<br>";
-                echo "Password hash in DB: " . substr($user['password'], 0, 20) . "...<br>";
-                echo "Password verify result: " . (password_verify($password, $user['password']) ? 'SUCCESS' : 'FAILED') . "<br>";
-            }
-            echo "</div>";
-            
             if ($user && password_verify($password, $user['password'])) {
                 // Successful login
                 $_SESSION['user_id'] = $user['id'];
