@@ -11,10 +11,11 @@ if (isset($_SESSION['user_id'])) {
 $errors = [];
 $username = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
     
+    // Basic validation
     if (empty($username)) {
         $errors[] = 'Username is required';
     }
@@ -23,27 +24,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Password is required';
     }
     
+    // If no validation errors, attempt login
     if (empty($errors)) {
         try {
             $stmt = $pdo->prepare("SELECT id, username, password, role FROM users WHERE username = ? AND active = 1");
             $stmt->execute([$username]);
             $user = $stmt->fetch();
             
-            if ($user && $password === $user['password']) {
+            // DEBUG INFO - Remove after testing
+            echo "<div style='border: 1px solid red; padding: 10px; margin: 10px; background: #ffe6e6;'>";
+            echo "<h3>Debug Information:</h3>";
+            echo "Username entered: '" . htmlspecialchars($username) . "'<br>";
+            echo "Password entered: '" . htmlspecialchars($password) . "'<br>";
+            echo "User found in DB: " . ($user ? 'YES' : 'NO') . "<br>";
+            if ($user) {
+                echo "DB Username: '" . $user['username'] . "'<br>";
+                echo "Password hash in DB: " . substr($user['password'], 0, 20) . "...<br>";
+                echo "Password verify result: " . (password_verify($password, $user['password']) ? 'SUCCESS' : 'FAILED') . "<br>";
+            }
+            echo "</div>";
+            
+            if ($user && password_verify($password, $user['password'])) {
+                // Successful login
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['role'] = $user['role'];
                 
+                // Update last login time using prepared statement
                 $stmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
                 $stmt->execute([$user['id']]);
                 
+                // Redirect to dashboard
                 header('Location: dashboard.php');
                 exit;
             } else {
                 $errors[] = 'Invalid username or password';
             }
         } catch (PDOException $e) {
-            $errors[] = 'Database error occurred';
+            $errors[] = 'Database error occurred. Please try again.';
+            error_log('Login error: ' . $e->getMessage());
         }
     }
 }
