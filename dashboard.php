@@ -22,6 +22,39 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_inventory') {
     exit;
 }
 
+// Handle AJAX request for search functionality
+if (isset($_GET['action']) && $_GET['action'] === 'search') {
+    header('Content-Type: application/json');
+    try {
+        $searchTerm = $_GET['search_term'] ?? '';
+        
+        if (empty($searchTerm)) {
+            // Return all records if search term is empty
+            $stmt = $pdo->query('SELECT * FROM InventoryTable ORDER BY ProductID ASC');
+        } else {
+            // Search across multiple columns
+            $stmt = $pdo->prepare('
+                SELECT * FROM InventoryTable 
+                WHERE ProductID LIKE ? 
+                OR ProductName LIKE ? 
+                OR SupplierName LIKE ? 
+                OR Status LIKE ? 
+                OR CAST(Quantity AS CHAR) LIKE ? 
+                OR CAST(Price AS CHAR) LIKE ? 
+                ORDER BY ProductID ASC
+            ');
+            $searchParam = '%' . $searchTerm . '%';
+            $stmt->execute([$searchParam, $searchParam, $searchParam, $searchParam, $searchParam, $searchParam]);
+        }
+        
+        $inventory = $stmt->fetchAll();
+        echo json_encode(['success' => true, 'data' => $inventory]);
+    } catch (PDOException $e) {
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // Handle DELETE operation with prepared statement
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
     header('Content-Type: application/json');
@@ -153,6 +186,52 @@ try {
         .btn-danger { background: #dc3545; color: white; }
         .btn-secondary { background: #6c757d; color: white; }
         
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .search-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .search-box {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 300px;
+            font-size: 14px;
+        }
+        
+        .search-box:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        
+        .clear-search {
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #6c757d;
+        }
+        
+        .clear-search:hover {
+            background: #e9ecef;
+        }
+        
+        .search-results {
+            margin: 10px 0;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        
         table {
             width: 100%;
             border-collapse: collapse;
@@ -224,6 +303,19 @@ try {
         .form-group input, .form-group select {
             width: 100%;
         }
+        
+        .no-results {
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+            padding: 20px;
+        }
+        
+        .highlight {
+            background-color: yellow;
+            padding: 1px 2px;
+            border-radius: 2px;
+        }
     </style>
 </head>
 <body>
@@ -237,11 +329,20 @@ try {
             <a href="logout.php" class="btn btn-danger">Logout</a>
         </div>
         
-        <!-- Control buttons -->
-        <div>
-            <button class="btn btn-success" onclick="toggleAddForm()">Add Product</button>
-            <button class="btn btn-primary" onclick="refreshInventory()">Refresh</button>
+        <!-- Control buttons and search -->
+        <div class="controls">
+            <div>
+                <button class="btn btn-success" onclick="toggleAddForm()">Add Product</button>
+                <button class="btn btn-primary" onclick="refreshInventory()">Refresh</button>
+            </div>
+            <div class="search-container">
+                <input type="text" id="search-box" class="search-box" placeholder="Search inventory..." onkeyup="searchInventory()" autocomplete="off">
+                <button class="clear-search" onclick="clearSearch()">Clear</button>
+            </div>
         </div>
+        
+        <!-- Search results info -->
+        <div id="search-results" class="search-results"></div>
         
         <!-- Add product form (hidden by default) -->
         <div id="add-form" class="add-form">
@@ -330,7 +431,10 @@ try {
     </div>
 
     <script>
-        // Display messages to usr
+        let searchTimeout;
+        let allInventoryData = [];
+        
+        // Display messages to user
         function showMessage(message, type = 'success') {
             const messageArea = document.getElementById('message-area');
             messageArea.innerHTML = `<div class="${type}">${message}</div>`;
@@ -352,8 +456,10 @@ try {
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
+                        allInventoryData = data.data;
                         updateInventoryTable(data.data);
                         showMessage('Inventory refreshed');
+                        updateSearchResults(data.data.length, data.data.length);
                     } else {
                         showMessage('Error refreshing inventory: ' + data.error, 'error');
                     }
@@ -363,23 +469,79 @@ try {
                 });
         }
         
+        // Search inventory with debouncing
+        function searchInventory() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const searchTerm = document.getElementById('search-box').value.trim();
+                performSearch(searchTerm);
+            }, 300); // 300ms delay for debouncing
+        }
+        
+        // Perform the actual search
+        function performSearch(searchTerm) {
+            const url = searchTerm ? `?action=search&search_term=${encodeURIComponent(searchTerm)}` : '?action=get_inventory';
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateInventoryTable(data.data, searchTerm);
+                        updateSearchResults(data.data.length, allInventoryData.length, searchTerm);
+                    } else {
+                        showMessage('Error searching inventory: ' + data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showMessage('Network error: ' + error.message, 'error');
+                });
+        }
+        
+        // Clear search and show all results
+        function clearSearch() {
+            document.getElementById('search-box').value = '';
+            refreshInventory();
+        }
+        
+        // Update search results display
+        function updateSearchResults(foundCount, totalCount, searchTerm = '') {
+            const resultsDiv = document.getElementById('search-results');
+            
+            if (searchTerm) {
+                resultsDiv.innerHTML = `Found ${foundCount} of ${totalCount} products matching "${searchTerm}"`;
+            } else {
+                resultsDiv.innerHTML = `Showing all ${totalCount} products`;
+            }
+        }
+        
+        // Highlight search terms in text
+        function highlightSearchTerm(text, searchTerm) {
+            if (!searchTerm) return text;
+            
+            const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+            return text.replace(regex, '<span class="highlight">$1</span>');
+        }
+        
         // Update table with new inventory data
-        function updateInventoryTable(inventory) {
+        function updateInventoryTable(inventory, searchTerm = '') {
             const tbody = document.getElementById('inventory-tbody');
             
             if (inventory.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center;">No inventory records found.</td></tr>';
+                const message = searchTerm ? 
+                    `No products found matching "${searchTerm}"` : 
+                    'No inventory records found.';
+                tbody.innerHTML = `<tr><td colspan="7" class="no-results">${message}</td></tr>`;
                 return;
             }
             
             tbody.innerHTML = inventory.map(row => `
                 <tr>
-                    <td>${row.ProductID}</td>
-                    <td>${row.ProductName}</td>
-                    <td class="quantity">${row.Quantity}</td>
-                    <td class="price">${parseFloat(row.Price).toFixed(2)}</td>
-                    <td class="status">${row.Status}</td>
-                    <td class="supplier">${row.SupplierName}</td>
+                    <td>${highlightSearchTerm(row.ProductID.toString(), searchTerm)}</td>
+                    <td>${highlightSearchTerm(row.ProductName, searchTerm)}</td>
+                    <td class="quantity">${highlightSearchTerm(row.Quantity.toString(), searchTerm)}</td>
+                    <td class="price">${highlightSearchTerm(parseFloat(row.Price).toFixed(2), searchTerm)}</td>
+                    <td class="status">${highlightSearchTerm(row.Status, searchTerm)}</td>
+                    <td class="supplier">${highlightSearchTerm(row.SupplierName, searchTerm)}</td>
                     <td class="actions">
                         <button class="edit-btn" onclick="editRow(this)">Edit</button>
                         <button class="delete-btn" onclick="deleteRow(this)">Delete</button>
@@ -393,6 +555,7 @@ try {
             const row = button.closest('tr');
             const cells = row.children;
             
+            // Get text content without HTML tags (remove highlights)
             const quantity = cells[2].textContent;
             const price = parseFloat(cells[3].textContent);
             const status = cells[4].textContent;
@@ -446,7 +609,13 @@ try {
             .then(data => {
                 if (data.success) {
                     showMessage(data.message);
-                    refreshInventory();
+                    // Refresh with current search term
+                    const searchTerm = document.getElementById('search-box').value.trim();
+                    if (searchTerm) {
+                        performSearch(searchTerm);
+                    } else {
+                        refreshInventory();
+                    }
                 } else {
                     showMessage('Error updating product: ' + data.error, 'error');
                 }
@@ -458,7 +627,12 @@ try {
         
         // Cancel edit mode
         function cancelEdit(button) {
-            refreshInventory();
+            const searchTerm = document.getElementById('search-box').value.trim();
+            if (searchTerm) {
+                performSearch(searchTerm);
+            } else {
+                refreshInventory();
+            }
         }
         
         // Delete product row
@@ -491,7 +665,13 @@ try {
             .then(data => {
                 if (data.success) {
                     showMessage(data.message);
-                    refreshInventory();
+                    // Refresh with current search term
+                    const searchTerm = document.getElementById('search-box').value.trim();
+                    if (searchTerm) {
+                        performSearch(searchTerm);
+                    } else {
+                        refreshInventory();
+                    }
                 } else {
                     showMessage('Error deleting product: ' + data.error, 'error');
                 }
@@ -501,7 +681,7 @@ try {
             });
         }
         
-        // add new product
+        // Add new product
         function addProduct() {
             const productId = document.getElementById('new-product-id').value;
             const productName = document.getElementById('new-product-name').value;
@@ -516,7 +696,7 @@ try {
                 return;
             }
             
-            //Send add request
+            // Send add request
             const formData = new FormData();
             formData.append('action', 'add');
             formData.append('product_id', productId);
@@ -542,7 +722,14 @@ try {
                     document.getElementById('new-price').value = '';
                     document.getElementById('new-status').value = 'A';
                     document.getElementById('new-supplier').value = '';
-                    refreshInventory();
+                    
+                    // Refresh with current search term
+                    const searchTerm = document.getElementById('search-box').value.trim();
+                    if (searchTerm) {
+                        performSearch(searchTerm);
+                    } else {
+                        refreshInventory();
+                    }
                 } else {
                     showMessage('Error adding product: ' + data.error, 'error');
                 }
@@ -551,6 +738,21 @@ try {
                 showMessage('Network error: ' + error.message, 'error');
             });
         }
+        
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            // Store initial inventory data
+            allInventoryData = <?php echo json_encode($inventory); ?>;
+            updateSearchResults(allInventoryData.length, allInventoryData.length);
+            
+            // Add enter key support for search
+            document.getElementById('search-box').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    searchInventory();
+                }
+            });
+        });
     </script>
 </body>
 </html>
